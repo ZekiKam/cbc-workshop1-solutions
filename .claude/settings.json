@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./secrets/**)",
+      "Edit(./secrets/**)"
+    ],
+    "disableBypassPermissionsMode": "disable"
+  }
+}

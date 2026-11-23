@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chore Roulette</title>
+  <style>
+    :root {
+      --paper: #f4efe4;
+      --card: #fffaf0;
+      --ink: #1d1b16;
+      --muted: #6b6457;
+      --accent: #d9482b;
+      --line: #d8cfbd;
+      --slices: #d9482b, #2f6b5a, #e7a72e, #3b5998, #9c4f7a, #6f8f2f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; background: var(--paper); color: var(--ink);
+      font: 16px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    main { max-width: 960px; margin: 0 auto; padding: 32px 16px 64px; }
+    header h1 {
+      font: 700 clamp(2.2rem, 6vw, 3.6rem)/1 Georgia, "Times New Roman", serif;
+      letter-spacing: -0.02em; margin: 0 0 8px;
+    }
+    header p { margin: 0 0 28px; color: var(--muted); max-width: 46ch; }
+    .grid { display: grid; gap: 20px; grid-template-columns: minmax(0, 1fr); }
+    .grid > * { min-width: 0; }
+    @media (min-width: 760px) { .grid { grid-template-columns: 320px 1fr; } }
+    .card {
+      background: var(--card); border: 1.5px solid var(--ink);
+      border-radius: 14px; padding: 18px; box-shadow: 4px 4px 0 var(--ink);
+    }
+    h2 {
+      font: 600 0.75rem/1 ui-monospace, "SF Mono", Menlo, monospace;
+      text-transform: uppercase; letter-spacing: 0.12em; margin: 0 0 12px; color: var(--muted);
+    }
+    form { display: flex; gap: 8px; margin-bottom: 10px; }
+    input {
+      flex: 1; min-width: 0; padding: 10px 12px; font: inherit;
+      border: 1.5px solid var(--line); border-radius: 10px; background: #fff;
+    }
+    input:focus { outline: 2px solid var(--accent); border-color: transparent; }
+    button {
+      font: 600 0.95rem/1 inherit; font-family: inherit; cursor: pointer;
+      padding: 10px 14px; border-radius: 10px; border: 1.5px solid var(--ink);
+      background: var(--ink); color: var(--paper);
+    }
+    button.ghost { background: transparent; color: var(--ink); }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    ul { list-style: none; margin: 0 0 18px; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+    li.chip {
+      display: inline-flex; align-items: center; gap: 6px;
+      padding: 4px 6px 4px 10px; border: 1.5px solid var(--line); border-radius: 999px; background: #fff;
+    }
+    li.chip button {
+      padding: 2px 7px; border: 0; background: transparent; color: var(--muted); font-size: 1rem;
+    }
+    .empty { color: var(--muted); font-size: 0.9rem; }
+    .stage { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+    .wheel-wrap { position: relative; width: min(340px, 100%); aspect-ratio: 1; }
+    .wheel-wrap::after {
+      content: ""; position: absolute; top: -6px; left: 50%; transform: translateX(-50%);
+      border: 12px solid transparent; border-top: 22px solid var(--ink);
+    }
+    canvas { width: 100%; height: 100%; transition: transform 3.2s cubic-bezier(.17,.67,.12,1); }
+    #current { font: 700 1.3rem/1.2 Georgia, serif; text-align: center; min-height: 1.6em; }
+    #current em { color: var(--accent); font-style: normal; }
+    .actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+    table { width: 100%; border-collapse: collapse; margin-top: 6px; }
+    td { padding: 10px 4px; border-top: 1.5px dashed var(--line); }
+    td:last-child { text-align: right; font-weight: 600; }
+    .note { font-size: 0.85rem; color: var(--muted); margin-top: 10px; }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Chore Roulette</h1>
+    <p>The wheel decides who does what, and nobody gets the bins two weeks running. No more arguing in the group chat.</p>
+  </header>
+
+  <div class="grid">
+    <section class="card" aria-label="Setup">
+      <h2>Flatmates</h2>
+      <form id="mate-form"><input id="mate-input" placeholder="e.g. Sam" maxlength="20" aria-label="Flatmate name"><button>Add</button></form>
+      <ul id="mates"></ul>
+      <h2>Chores</h2>
+      <form id="chore-form"><input id="chore-input" placeholder="e.g. Bins" maxlength="24" aria-label="Chore"><button>Add</button></form>
+      <ul id="chores"></ul>
+    </section>
+
+    <section class="card stage" aria-label="Roulette">
+      <div class="wheel-wrap"><canvas id="wheel" width="680" height="680"></canvas></div>
+      <div id="current" aria-live="polite"></div>
+      <div class="actions">
+        <button id="spin">Spin for next chore</button>
+        <button id="new-week" class="ghost">New week</button>
+      </div>
+      <div style="width:100%">
+        <h2 style="margin-top:12px">This week's rota</h2>
+        <table id="rota"></table>
+        <p class="note" id="fair-note"></p>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script>
+  const KEY = "chore-roulette-v1";
+  const COLORS = getComputedStyle(document.documentElement).getPropertyValue("--slices").split(",").map(s => s.trim());
+  const defaults = { mates: [], chores: [], rota: {}, lastWeek: {} };
+  let state = load();
+  let rotation = 0;
+  let spinning = false;
+
+  function load() {
+    try { return { ...defaults, ...JSON.parse(localStorage.getItem(KEY)) }; }
+    catch { return { ...defaults }; }
+  }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {} }
+
+  const $ = id => document.getElementById(id);
+  const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  function addItem(list, value) {
+    const v = value.trim();
+    if (!v || state[list].some(x => x.toLowerCase() === v.toLowerCase())) return;
+    state[list].push(v); save(); render();
+  }
+  function removeItem(list, i) {
+    const [gone] = state[list].splice(i, 1);
+    if (list === "chores") delete state.rota[gone];
+    if (list === "mates") for (const c in state.rota) if (state.rota[c] === gone) delete state.rota[c];
+    save(); render();
+  }
+
+  // Fairness: nobody gets the chore they had last week, and chores are spread evenly.
+  // We try many random ways to finish this week's rota and keep the fairest one.
+  function pickFor(chore) {
+    const todo = state.chores.filter(c => !state.rota[c]);
+    let best = null, bestScore = Infinity;
+    for (let t = 0; t < 400; t++) {
+      const plan = { ...state.rota };
+      for (const c of todo) {
+        const pool = state.mates.filter(m => m !== state.lastWeek[c]);
+        const from = pool.length ? pool : state.mates;
+        plan[c] = from[Math.floor(Math.random() * from.length)];
+      }
+      const loads = state.mates.map(m => Object.values(plan).filter(x => x === m).length);
+      const repeats = todo.filter(c => plan[c] === state.lastWeek[c]).length;
+      const score = repeats * 100 + Math.max(...loads) - Math.min(...loads);
+      if (score < bestScore) { bestScore = score; best = plan; }
+    }
+    return best[chore];
+  }
+  const nextChore = () => state.chores.find(c => !state.rota[c]);
+
+  function drawWheel() {
+    const cv = $("wheel"), ctx = cv.getContext("2d"), r = cv.width / 2;
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    const mates = state.mates.length ? state.mates : ["Add flatmates"];
+    const slice = (Math.PI * 2) / mates.length;
+    mates.forEach((m, i) => {
+      ctx.beginPath(); ctx.moveTo(r, r);
+      ctx.arc(r, r, r - 6, i * slice - Math.PI / 2, (i + 1) * slice - Math.PI / 2);
+      ctx.fillStyle = state.mates.length ? COLORS[i % COLORS.length] : "#d8cfbd";
+      ctx.fill(); ctx.lineWidth = 4; ctx.strokeStyle = "#1d1b16"; ctx.stroke();
+      ctx.save(); ctx.translate(r, r); ctx.rotate(i * slice + slice / 2 - Math.PI / 2);
+      ctx.fillStyle = "#fffaf0"; ctx.font = "600 34px system-ui, sans-serif"; ctx.textAlign = "right";
+      ctx.fillText(m.length > 12 ? m.slice(0, 11) + "…" : m, r - 30, 12); ctx.restore();
+    });
+    ctx.beginPath(); ctx.arc(r, r, 38, 0, Math.PI * 2); ctx.fillStyle = "#fffaf0"; ctx.fill(); ctx.stroke();
+  }
+
+  function spin() {
+    const chore = nextChore();
+    if (spinning || !chore || !state.mates.length) return;
+    spinning = true; render();
+    const winner = pickFor(chore);
+    const idx = state.mates.indexOf(winner), slice = 360 / state.mates.length;
+    const target = 360 - (idx * slice + slice / 2);
+    rotation += 360 * 5 + ((target - rotation) % 360 + 360) % 360;
+    $("current").innerHTML = `Spinning for <em>${esc(chore)}</em>…`;
+    $("wheel").style.transform = `rotate(${rotation}deg)`;
+    setTimeout(() => {
+      state.rota[chore] = winner; spinning = false; save();
+      render(`<em>${esc(winner)}</em> is on ${esc(chore.toLowerCase())}`);
+    }, 3300);
+  }
+
+  function newWeek() {
+    state.lastWeek = { ...state.lastWeek, ...state.rota };
+    state.rota = {}; save(); render("New week. Fresh spins.");
+  }
+
+  function render(message) {
+    $("mates").innerHTML = state.mates.length
+      ? state.mates.map((m, i) => `<li class="chip">${esc(m)}<button aria-label="Remove ${esc(m)}" data-list="mates" data-i="${i}">×</button></li>`).join("")
+      : `<li class="empty">Add at least two flatmates.</li>`;
+    $("chores").innerHTML = state.chores.length
+      ? state.chores.map((c, i) => `<li class="chip">${esc(c)}<button aria-label="Remove ${esc(c)}" data-list="chores" data-i="${i}">×</button></li>`).join("")
+      : `<li class="empty">Bins, dishes, bathroom…</li>`;
+    $("rota").innerHTML = state.chores.map(c =>
+      `<tr><td>${esc(c)}</td><td>${state.rota[c] ? esc(state.rota[c]) : "<span class='empty'>not spun yet</span>"}</td></tr>`).join("");
+    const chore = nextChore();
+    const ready = state.mates.length >= 2 && chore;
+    $("spin").disabled = spinning || !ready;
+    $("spin").textContent = chore ? `Spin for ${chore.toLowerCase()}` : "All chores assigned";
+    if (message !== undefined) $("current").innerHTML = message;
+    else if (!spinning && state.mates.length < 2) $("current").textContent = "Add flatmates and chores to start";
+    const skipped = chore && state.lastWeek[chore];
+    $("fair-note").textContent = skipped && state.mates.length > 1
+      ? `Fair play: ${skipped} did ${chore.toLowerCase()} last week, so they're out of this spin.` : "";
+    drawWheel();
+  }
+
+  $("mate-form").addEventListener("submit", e => { e.preventDefault(); addItem("mates", $("mate-input").value); $("mate-input").value = ""; });
+  $("chore-form").addEventListener("submit", e => { e.preventDefault(); addItem("chores", $("chore-input").value); $("chore-input").value = ""; });
+  document.addEventListener("click", e => { const b = e.target.closest("button[data-list]"); if (b) removeItem(b.dataset.list, +b.dataset.i); });
+  $("spin").addEventListener("click", spin);
+  $("new-week").addEventListener("click", newWeek);
+  render();
+</script>
+</body>
+</html>
